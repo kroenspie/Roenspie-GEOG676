@@ -1,173 +1,139 @@
 ## Lab 05: Toolbox
 
 import arcpy
+import os
 
 class Toolbox(object):
     def __init__(self):
-        """Define the toolbox (the name of the toolbox is the name of the
-        .pyt file)."""
         self.label = "Toolbox"
         self.alias = ""
-
-        # List of tool classes associated with this toolbox
         self.tools = [BuildingProximity]
-
 
 class BuildingProximity(object):
     def __init__(self):
-        """Define the tool (tool name is the name of the class)."""
         self.label = "BuildingProximity"
         self.description = "Determine which buildings on TAMU's campus are near a targeted building"
         self.canRunInBackground = False
-	self.category = "Building Tools"
+        self.category = "Building Tools"
 
     def getParameterInfo(self):
-        param0 = arcpy.Parameter( #geodatabase folder -- this is a new folder becuase in code below (in execute), gdb gets created 
+        param0 = arcpy.Parameter(
             displayName="GDB Folder", 
-            name="GDBFolder",
-            datatype="GPString",
+            name="gdb_folder",
+            datatype="DEFolder",
             parameterType="Required",
-            direction="Input",
+            direction="Input"
         )
-        param1 = arcpy.Parameter( #geodatabase
+        param1 = arcpy.Parameter(
             displayName="GDB Name",
-            name="GDBName",
+            name="gdb_name",
             datatype="GPString",
             parameterType="Required",
             direction="Input"
         )
-        param2 = arcpy.Parameter( #garage CSV
+        param2 = arcpy.Parameter(
             displayName="Garage CSV File",
-            name="GarageCSVFile",
+            name="garage_csv_file",
             datatype="DEFile",
             parameterType="Required",
             direction="Input"
         )        
-        param3 = arcpy.Parameter( #garage layer name (that is going to be (?)created as XY event)
+        param3 = arcpy.Parameter(
             displayName="Garage Layer Name",
-            name="GarageLayerName",
+            name="garage_layer_name",
             datatype="GPString",
             parameterType="Required",
             direction="Input"
         )        
-        param4 = arcpy.Parameter( #campus geodatabase
+        param4 = arcpy.Parameter(
             displayName="Campus GDB",
-            name="CampusGDB",
-            datatype="DEType",
+            name="campus_gdb",
+            datatype="DEWorkspace",
             parameterType="Required",
             direction="Input"
         )
-        param5 = arcpy.Parameter( #buffer distance
+        param5 = arcpy.Parameter(
             displayName="Buffer Radius",
-            name="bufferRadius",
+            name="buffer_radius",
             datatype="GPDouble",
             parameterType="Required",
             direction="Input"
         )
         params = [param0, param1, param2, param3, param4, param5]
         return params
-        
 
     def isLicensed(self):
-        """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed.  This method is called whenever a parameter
-        has been changed."""
         return
 
     def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool
-        parameter.  This method is called after internal validation."""
         return
 
     def execute(self, parameters, messages):
-        folder_path = parameters[0].valueAsText
-        gdb_name = parameters[1].valueAsText
-        gdb_path = folder_path + '\\' + gdb_name
-        arcpy.CreateFileGDB_management(folder_path, gdb_name)
+        try:
+            # Enable overwriting output
+            arcpy.env.overwriteOutput = True
 
-        csv_path = parameters[2].valueAsText
-        garage_layer_name = parameters[3].valueAsText
-        garages = arcpy.MakeXYEventLayer_management(csv_path, 'X', 'Y', garage_layer_name)
+            folder_path = parameters[0].valueAsText
+            gdb_name = parameters[1].valueAsText
+            gdb_path = os.path.join(folder_path, gdb_name + ".gdb")
 
-        input_layer = garages
-        arcpy.FeatureClassToGeodatabase_conversion(input_layer, gdb_path)
-        garage_points = gdb_path + '\\' + garage_layer_name
+            # Create File Geodatabase
+            if not arcpy.Exists(gdb_path):
+                arcpy.AddMessage(f"Creating geodatabase: {gdb_path}")
+                arcpy.CreateFileGDB_management(folder_path, gdb_name)
+            else:
+                arcpy.AddMessage(f"Geodatabase already exists: {gdb_path}")
 
-        campus = parameters[4].valueAsText
-        bldgs_campus = campus + '\Structures'
-        bldgs = gdb_path + '\\' + 'Buildings'
+            csv_path = parameters[2].valueAsText
+            garage_layer_name = parameters[3].valueAsText
 
-        arcpy.Copy_management(bldgs_campus, bldgs)
+            # Create XY Event Layer
+            arcpy.AddMessage("Creating XY Event Layer")
+            garages = arcpy.MakeXYEventLayer_management(csv_path, 'X', 'Y', garage_layer_name)
 
-        spatial_ref = arcpy.Describe(bldgs).spatialReference
-        arcpy.Project_management(garage_points, gdb_path + '\garage_pts_reproj', spatial_ref)
+            # Feature Class to Geodatabase
+            arcpy.AddMessage("Converting Feature Class to Geodatabase")
+            arcpy.FeatureClassToGeodatabase_conversion(garages, gdb_path)
+            garage_points = os.path.join(gdb_path, garage_layer_name)
 
-        buffer_dist = int(parameters[5].value)
-        garage_buff = arcpy.Buffer_analysis(gdb_path + '\garage_pts_reproj', gdb_path + '\garage_pts_buff', 150)
+            campus = parameters[4].valueAsText
+            buildings_campus = os.path.join(campus, 'Structures')
+            buildings = os.path.join(gdb_path, 'Buildings')
 
-        arcpy.Intersect_analysis([garage_buff, bldgs], gdb_path + '\garage_bldgs_intersect', 'ALL')
+            # Copy Buildings
+            arcpy.AddMessage("Copying Buildings")
+            arcpy.Copy_management(buildings_campus, buildings)
 
-        arcpy.ExportTable_conversion(gdb_path + '\garage_bldgs_intersect.dbf', r'P:\676\DevSource\GEOG_676_iles\Lab_05\nearby_bldgs.csv')
+            # Project Garage Points
+            arcpy.AddMessage("Projecting Garage Points")
+            spatial_ref = arcpy.Describe(buildings).spatialReference
+            garage_points_reproj = os.path.join(gdb_path, 'garage_points_reproj')
+            arcpy.Project_management(garage_points, garage_points_reproj, spatial_ref)
 
-        return
+            # Buffer Analysis
+            arcpy.AddMessage("Performing Buffer Analysis")
+            buffer_distance = parameters[5].value
+            garage_buffer = os.path.join(gdb_path, 'garage_points_buffer')
+            arcpy.Buffer_analysis(garage_points_reproj, garage_buffer, buffer_distance)
 
-    def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed.  This method is called whenever a parameter
-        has been changed."""
-        return
+            # Intersect Analysis
+            arcpy.AddMessage("Performing Intersect Analysis")
+            garage_building_intersect = os.path.join(gdb_path, 'garage_building_intersect')
+            arcpy.Intersect_analysis([garage_buffer, buildings], garage_building_intersect, 'ALL')
 
-    def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool
-        parameter. This method is called after internal validation."""
-        return
+            # Export to CSV
+            arcpy.AddMessage("Exporting to CSV")
+            output_csv = os.path.join(arcpy.env.workspace, 'nearby_buildings.csv')
+            arcpy.TableToTable_conversion(garage_building_intersect, arcpy.env.workspace, 'nearby_buildings.csv')
 
-    def execute(self, parameters, messages):
-        """The source code of the tool."""
-        folder_path = parameters[0].valueasText
-        gdb_name = parameters[1].valueasText
-        gdb_path = folder_path + '\\' + gdb_name
-        arcpy.CreateFileGDB_management(folder_path, gdb_name)
-    
+            arcpy.AddMessage(f"Output CSV created: {output_csv}")
 
-        csv_path = parameters[2].valueasText
-        garage_layer_name = parameters[3].valueasText
-        garages = arcpy.MakeXYEventLayer_management(csv_path, 'X', 'Y', garage_layer_name)
+        except arcpy.ExecuteError:
+            arcpy.AddError(arcpy.GetMessages(2))
+        except Exception as e:
+            arcpy.AddError(f"An error occurred: {str(e)}")
 
-
-        input_layer = garages
-        arcpy.FeatureClassToGeodatabase_conversion(input_layer, gdb_path)
-        garage_points = gdb_path + '\\' + garage_layer_name
-
-
-        campus = parameters[4].valueasText
-        buildings_campus = campus + '\Structures'
-        buildings = gdb_path + '\\' + 'Buildings'
-
-
-        arcpy.Copy_management(buildings_campus, buildings)
-
-
-        spatial_ref = arcpy.Describe(buildings).spatialReference
-        arcpy.Project_management(garage_points, gdb_path + '\Garage_Points_Reprojected', spatial_ref)
-
-
-        buffer_distance = int(parameters[5].value)
-        garageBuffer = arcpy.Buffer_analysis(gdb_path + '\Garage_Points_Reprojected', gdb_path + '\Garage_Points_Buffer', 150)
-
-
-        arcpy.Intersect_analysis([garageBuffer, buildings], gdb_path + '\Garage_Building_Intersect', 'ALL')
-
-
-        arcpy.TableToTable_conversion(gdb_path + '\Garage_Building_Intersect.dbf', folder_path, 'BuildingsCloseBy.csv')
-
-        return None
-
-    def postExecute(self, parameters):
-        """This method takes place after outputs are processed and
-        added to the display."""
         return
