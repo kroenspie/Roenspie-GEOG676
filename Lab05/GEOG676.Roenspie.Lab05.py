@@ -1,6 +1,6 @@
 ## Lab 05: Toolbox
 
-import arcpy
+mport arcpy
 import os
 
 class Toolbox(object):
